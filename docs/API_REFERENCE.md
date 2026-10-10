@@ -1,79 +1,90 @@
 # Collective Client Scripting API Reference
 
-Полная техническая спецификация встроенного скриптового движка Collective Client.
+Полная техническая спецификация мощного скриптового движка Collective Client. Скрипты имеют **неограниченный** доступ ко всем подсистемам клиента и игры.
 
-## Встроенные переменные (Script Bindings)
+---
 
-В каждом выполняемом скрипте автоматически доступны следующие глобальные объекты:
+## 🌟 Глобальные переменные в скриптах
 
 | Переменная | Тип Java/Kotlin | Описание |
-|------------|-----------------|----------|
-| `ctx` | `me.collective.scripting.ScriptContext` | Контекст скрипта: управление жизненным циклом, регистрация модулей |
-| `mc` / `client` | `net.minecraft.client.MinecraftClient` | Синглтон клиента Minecraft (доступ к `mc.player`, `mc.world`, `mc.options` и т.д.) |
-| `print(msg)` | `Consumer<Object>` | Выводит форматированное сообщение в чат игрока с префиксом скрипта |
-| `log(msg)` | `Consumer<Object>` | Выводит сообщение в стандартный вывод консоли (`stdout`) |
+|---|---|---|
+| `ctx` | `ScriptContext` | Контекст скрипта: создание модулей, команд, элементов HUD, управление ротациями, пакетами и Baritone |
+| `mc` / `client` | `MinecraftClient` | Инстанс клиента Minecraft (`player`, `world`, `interactionManager`, `options`, `networkHandler`) |
+| `modules` | `ModuleManager` | Менеджер модулей: доступ ко всем модулям чита, их состояниям и настройкам |
+| `commands` | `CommandManager` | Менеджер команд чита: вызов любых встроенных команд через `commands.execute(".help")` |
+| `events` | `EventBus` | Глобальная шина событий клиента (`subscribe`, `unsubscribe`, `post`) |
+| `rotations` | `RotationUtils` | Серверный движок тихих и плавных ротаций без дергания камеры |
+| `baritone` | `BaritoneBridge` | Прямое управление навигацией и поиском путей Baritone |
+| `inv` | `InventoryUtil` | Поиск, свап предметов в хотбаре и инвентаре |
+| `fonts` | `FontManager` | Отрисовка кастомного сглаженного CFont шрифта с кириллицей |
+| `blur` | `BlurEngine` | Аппаратный шейдерный Frosted Glass Blur |
+| `print(msg)` | `Consumer<Object>` | Вывод сообщения в чат игры с префиксом скрипта |
+| `log(msg)` | `Consumer<Object>` | Логирование в системную консоль `stdout` |
 
 ---
 
-## 1. Регистрация модулей через `ctx.module(...)`
+## 1. Регистрация Модулей и Настроек (`ctx.module`)
 
-Скрипт может регистрировать один или несколько полноценных модулей, которые сразу же появляются в интерфейсе ClickGUI Collective Client!
-
-### Сигнатуры метода:
-- `ctx.module(name: String, category: Category, description: String): ScriptModule`
-- `ctx.module(name: String, category: Category): ScriptModule`
-- `ctx.module(name: String, categoryName: String): ScriptModule`
-
-### Категории (`me.collective.category.Category`):
-- `Category.COMBAT` — Боевые модули
-- `Category.MOVEMENT` — Модули передвижения
-- `Category.RENDER` — Визуальные модули
-- `Category.PLAYER` — Модули взаимодействия с игроком
-- `Category.MISC` — Разное
-
----
-
-## 2. События модуля (`ScriptModule`)
-
-Объект `ScriptModule` предоставляет следующие обработчики жизненного цикла:
+Скрипт может регистрировать полноценный модуль, который появляется в интерфейсе ClickGUI:
 
 ```kotlin
-val myMod = ctx.module("MyCustomMod", Category.MISC, "Описание модуля")
+val mod = ctx.module("Killaura", Category.COMBAT, "Автоматическая атака врагов")
 
-// Вызывается при включении модуля игроком
-myMod.onEnable {
-    print("Модуль включен")
-}
+// Создание интерактивных настроек для ClickGUI
+val range = mod.numberSetting("Range", 3.8, 1.0, 6.0, 0.1)
+val playersOnly = mod.boolSetting("PlayersOnly", true)
+val espColor = mod.colorSetting("Color", java.awt.Color.RED)
+val mode = mod.stringSetting("Mode", "Single")
+```
 
-// Вызывается при выключении модуля
-myMod.onDisable {
-    print("Модуль выключен")
-}
+### Поддерживаемые события модуля:
+- `onEnable { mod -> ... }` — при активации
+- `onDisable { mod -> ... }` — при деактивации
+- `onTick { mod -> ... }` — каждый клиентский тик
+- `onPacketSend { event -> ... }` — при отправке пакета (можно отменять: `event.cancel()`)
+- `onPacketReceive { event -> ... }` — при приеме пакета от сервера (`event.cancel()`)
+- `onRender3D { event -> ... }` — рендер в 3D мире (линии, боксы, трассеры)
+- `onPlayerMove { event -> ... }` — модификация вектора перемещения игрока
+- `onBreakBlock { event -> ... }` — начало ломания блока
+- `onSendMessage { event -> ... }` — перехват сообщений перед отправкой в чат
+- `onMouseClick { event -> ... }` — клики мыши
+- `onKeyInput { event -> ... }` — нажатия клавиатуры
+- `onInteractEntity { event -> ... }` — взаимодействие с сущностями
 
-// Вызывается каждый тик клиента (20 раз в секунду) пока модуль активен
-myMod.onTick { mod ->
-    val player = mc.player ?: return@onTick
-    // логика тика...
-}
+---
 
-// Вызывается при отправке пакета на сервер
-myMod.onPacketSend { event ->
-    // event.packet — объект Packet<?>
-    // event.cancel() — отменить отправку пакета
-}
+## 2. Создание Кастомных Элементов HUD (`ctx.hud`)
 
-// Вызывается при получении пакета от сервера
-myMod.onPacketReceive { event ->
-    // event.packet — объект Packet<?>
-    // event.cancel() — отменить обработку пакета
+Скрипты могут добавлять собственные виджеты на экран, перемещаемые в `HudEditor`:
+
+```kotlin
+val myHud = ctx.hud("MyWatermark", "Кастомный ватермарк", 10.0f, 10.0f)
+myHud.setSize(100.0f, 20.0f)
+
+myHud.onRender { context, delta ->
+    // context: DrawContext
+    fonts.drawString(context, "§bCollective §fCustom Script", 2.0f, 2.0f, java.awt.Color.WHITE)
 }
 ```
 
 ---
 
-## 3. Управление жизненным циклом скриптов
+## 3. Регистрация Кастомных Команд Чайта (`ctx.command`)
 
-При выгрузке или перезагрузке скрипта (`.scripts reload`):
-1. Все модули, созданные в контексте этого скрипта, автоматически выключаются (`onDisable`).
-2. Модули удаляются из глобального `ModuleManager` и из GUI.
-3. Очищаются все ссылки, предотвращая утечки памяти.
+```kotlin
+ctx.command("teleport_macro", "Быстрый макрос", { args ->
+    print("Вызвана команда со значением: ${args.joinToString()}")
+}, "tpmacro", "tpm")
+```
+
+---
+
+## 4. Методы автоматизации в `ctx`
+
+- `ctx.rotateSilent(yaw, pitch)` — тихий поворот для сервера.
+- `ctx.rotateTo(targetPos)` / `ctx.rotateTo(x, y, z)` — автоматическое вычисление углов и наводка на координаты.
+- `ctx.sendPacket(packet)` — отправка любого сырого пакета Minecraft.
+- `ctx.pathTo(x, y, z)` — запуск авто-навигации Baritone к целевому блоку.
+- `ctx.cancelPath()` — отмена навигации Baritone.
+- `ctx.sendChatMessage(msg)` — отправка сообщения или команды ванильного сервера (`/`).
+- `ctx.executeClientCommand(cmd)` — вызов любой команды Collective Client (например, `.toggle Killaura`).
